@@ -1,0 +1,111 @@
+---
+title: "GenomeReDigest"
+output: fragments of DNA from fasta files
+date: "2026-04-13"
+---
+
+```{r setup, include=FALSE}
+# load libraries
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+if (!require("BiocManager", quietly = TRUE)){install.packages("BiocManager")}
+if (!require("DECIPHER", quietly = TRUE)){BiocManager::install("DECIPHER")}
+
+# this package does the heavy lifting for reading in large DNA seq data, knowing RE patterns, fragmenting, and returning the fragment sizes.
+library(DECIPHER)
+
+```
+
+```{r digest}
+# load all valid, common cutters.
+data(RESTRICTION_ENZYMES)
+# all files in the local folder with .fa or .fasta extension - these must be valid genome files. This script will not check.
+DNA_files <- list.files(path = "./", pattern = "\\.fasta$|\\.fa$", full.names = TRUE)
+# concat all genome fasta into one string to analyze
+dna_as_string <- do.call(c, lapply(DNA_files, readDNAStringSet))
+
+# pick your site or sites, common nomenclature - fill in up to three in order from 1 to 3, else leave blank
+
+enzyme_1 <- "EcoRI"
+enzyme_2 <- ""
+enzyme_3 <- ""
+
+if(enzyme_1 != "" && enzyme_2 != "" && enzyme_3 != ""){
+  sites <- RESTRICTION_ENZYMES[c(enzyme_1,enzyme_2, enzyme_3)]
+  title_for_plot <- paste0("in silico digestion with ",enzyme_1,", ",enzyme_2,", and ",enzyme_3)
+  }
+
+if(enzyme_1 != "" && enzyme_2 != "" && enzyme_3 == ""){
+  sites <- RESTRICTION_ENZYMES[c(enzyme_1,enzyme_2)]
+  title_for_plot <- paste0("in silico digestion with ",enzyme_1," and ",enzyme_2)
+  }
+
+if(enzyme_1 != "" && enzyme_2 == "" && enzyme_3 == ""){
+  sites <- RESTRICTION_ENZYMES[c(enzyme_1)]
+  title_for_plot <- paste0("in silico digestion with ",enzyme_1)
+  }
+
+fragments_out <- DigestDNA(sites, dna_as_string, type = "fragments", strand = "top")
+df_output <- as.data.frame(width(unlist(fragments_out)))
+colnames(df_output)[1] <- "frag_length"
+# order by length, desc. to later filter outliers that may complicate the visualization of size distribution (i.e. 3 Mbp or 5 bp)
+df_output <- df_output %>% arrange(desc(frag_length))
+
+```
+
+```{r filtering for analysis}
+# we will apply a dynamic filtering, based on the output size ranges
+# remove the upper and lower X percent of fragments
+remove_fraction = 0.01
+
+limit_row = round(remove_fraction*nrow(df_output),0)
+# copy df to manipulate
+df_filter <- df_output
+df_filter <- head(df_filter, -limit_row)
+df_filter <- tail(df_filter, -limit_row)
+
+# after filtering the "outliers"
+total_frags <- as.integer(nrow(df_filter))
+total_bases = sum(df_filter$frag_length)
+min_length <- min(df_filter$frag_length)
+max_length <- max(df_filter$frag_length)
+avg_length <- mean(df_filter$frag_length)
+# label the data for later visualization against theoretical digestions
+df_filter <- df_filter %>% mutate(histo_type = "real_data")
+
+```
+
+```{r plotting, echo=FALSE}
+# make theoretical distributions for 4 and 6-base cutters - assumes uniform distribution of RE sites in a genome.
+# How often will a RE cut DNA? For 6-base cutter, (ATCG) 4^6 = ~4000 bp expected for 6-base cutter, and 256 (4^4) for 4-base cutter
+
+# n = number of observations, mean = average, sd = standard deviation, abs > 0
+# use the average REAL frag size as the deviation for the ideal 6 or 4-base cutter distribution
+df_6normal <- data.frame(frag_length = abs(round(rnorm(n = total_frags, mean = 4000, sd = avg_length))))
+df_6normal <- df_6normal %>% mutate(histo_type = "base6_data")
+df_4normal <- data.frame(frag_length = abs(round(rnorm(n = total_frags, mean = 256, sd = avg_length))))
+df_4normal <- df_4normal %>% mutate(histo_type = "base4_data")
+
+# concat all fragment dist. to overlap on histogram
+df_digested <- rbind(df_filter, df_6normal, df_4normal)
+
+# hardcode the bin number = it looks nicer.
+bin_number <- 256
+
+# histogram
+ggplot(df_digested, aes(x = frag_length, fill = histo_type)) + 
+  geom_histogram(bins = bin_number, boundary = 0, position = "identity", alpha = 0.6, show.legend = TRUE) +
+  theme_classic() +
+  scale_x_sqrt() +
+  scale_y_sqrt() +
+  scale_fill_discrete(name = "Digestion type", labels = c("One 4-base cutter", "One 6-base cutter", "Actual RE digestion")) +
+  labs(x = "Fragment length (bp)", y = "Fragment # per bin") +
+  ggtitle(title_for_plot) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# theoretical perfect distribution (assumes uniform RE site distribution in DNA) overlay with actual in silico digestion of actual DNA seq.
+
+```

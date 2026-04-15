@@ -84,16 +84,16 @@ df_filter <- df_filter %>% mutate(histo_type = "real_data")
 
 # n = number of observations, mean = average, sd = standard deviation, abs > 0
 # use the average REAL frag size as the deviation for the ideal 6 or 4-base cutter distribution
-df_6normal <- data.frame(frag_length = abs(round(rnorm(n = total_frags, mean = 4000, sd = avg_length))))
+df_6normal <- data.frame(frag_length = abs(round(rnorm(n = total_frags, mean = 4000, sd = 4000))))
 df_6normal <- df_6normal %>% mutate(histo_type = "base6_data")
-df_4normal <- data.frame(frag_length = abs(round(rnorm(n = total_frags, mean = 256, sd = avg_length))))
-df_4normal <- df_4normal %>% mutate(histo_type = "base4_data")
+#df_4normal <- data.frame(frag_length = abs(round(rnorm(n = total_frags, mean = 256, sd = 256))))
+#df_4normal <- df_4normal %>% mutate(histo_type = "base4_data")
 
 # concat all fragment dist. to overlap on histogram
-df_digested <- rbind(df_filter, df_6normal, df_4normal)
+df_digested <- rbind(df_filter, df_6normal)
 
 # hardcode the bin number = it looks nicer.
-bin_number <- 256
+bin_number <- 128
 
 # histogram
 ggplot(df_digested, aes(x = frag_length, fill = histo_type)) + 
@@ -101,7 +101,7 @@ ggplot(df_digested, aes(x = frag_length, fill = histo_type)) +
   theme_classic() +
   scale_x_sqrt() +
   scale_y_sqrt() +
-  scale_fill_discrete(name = "Digestion type", labels = c("One 4-base cutter", "One 6-base cutter", "Actual RE digestion")) +
+  scale_fill_discrete(name = "Digestion type", labels = c("One 6-base cutter", "Actual RE digestion")) +
   labs(x = "Fragment length (bp)", y = "Fragment # per bin") +
   ggtitle(title_for_plot) +
   theme(plot.title = element_text(hjust = 0.5))

@@ -97,11 +97,15 @@ bin_number <- 128
 
 # histogram
 ggplot(df_digested, aes(x = frag_length, fill = histo_type)) + 
-  geom_histogram(bins = bin_number, boundary = 0, position = "identity", alpha = 0.6, show.legend = TRUE) +
+  
+  #geom_histogram(bins = bin_number, boundary = 0, position = "identity", alpha = 0.6, show.legend = TRUE) +
+  
+  geom_density(alpha = 0.6) +
+
   theme_classic() +
   scale_x_sqrt() +
   scale_y_sqrt() +
-  scale_fill_discrete(name = "Digestion type", labels = c("One 6-base cutter", "Actual RE digestion")) +
+  scale_fill_discrete(name = "Digestion type", labels = c("Hypothetical 6-base RE", "Actual digestion dist.")) +
   labs(x = "Fragment length (bp)", y = "Fragment # per bin") +
   ggtitle(title_for_plot) +
   theme(plot.title = element_text(hjust = 0.5))

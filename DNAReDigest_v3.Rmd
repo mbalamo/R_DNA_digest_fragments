@@ -1,0 +1,208 @@
+---
+title: "DNAReDigest"
+output: density plot for DNA digestion with given enzyme(s) overlay with 6-base cutter theoretical distribution
+date: "2026-04-13"
+---
+
+```{r setup, include=FALSE}
+# load libraries -- we assume you already have this installed.
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+if (!require("BiocManager", quietly = TRUE)){install.packages("BiocManager")}
+if (!require("DECIPHER", quietly = TRUE)){BiocManager::install("DECIPHER")}
+
+# this package does the heavy lifting for reading in large DNA seq data, knowing RE patterns, fragmenting, and returning the fragment sizes.
+library(DECIPHER)
+
+```
+
+```{r digest all DNA fasta within the run folder}
+# load all valid, common cutters.
+data(RESTRICTION_ENZYMES)
+
+# all files in the local folder with .fa or .fasta extension --- these must be valid DNA fasta files. This script will not check.
+DNA_files <- list.files(path = "./", pattern = "\\.fasta$|\\.fa$", full.names = TRUE)
+# concat all DNA fasta into one string to analyze
+dna_as_string <- do.call(c, lapply(DNA_files, readDNAStringSet))
+
+# pick your RE digest site or sites, using common nomenclature
+# For example, from NEB catalog: BamHI, XhoI, HindIII
+# fill in up to three in order from 1 to 3, else leave blank
+
+enzyme_1 <- "EcoRI"
+enzyme_2 <- ""
+enzyme_3 <- ""
+
+if(enzyme_1 != "" && enzyme_2 != "" && enzyme_3 != ""){
+  sites <- RESTRICTION_ENZYMES[c(enzyme_1,enzyme_2, enzyme_3)]
+  title_for_plot <- paste0("Filtered digestion with ",enzyme_1,", ",enzyme_2,", and ",enzyme_3)
+  }
+
+if(enzyme_1 != "" && enzyme_2 != "" && enzyme_3 == ""){
+  sites <- RESTRICTION_ENZYMES[c(enzyme_1,enzyme_2)]
+  title_for_plot <- paste0("Filtered digestion with ",enzyme_1," and ",enzyme_2)
+  }
+
+if(enzyme_1 != "" && enzyme_2 == "" && enzyme_3 == ""){
+  sites <- RESTRICTION_ENZYMES[c(enzyme_1)]
+  title_for_plot <- paste0("Filtered digestion with ",enzyme_1)
+  }
+
+fragments_out <- DigestDNA(sites, dna_as_string, type = "fragments", strand = "top")
+df_output <- as.data.frame(width(unlist(fragments_out)))
+colnames(df_output)[1] <- "frag_length"
+
+# order by length, desc. to later filter outliers that may complicate the visualization of size distribution (i.e. 3 Mbp or 5 bp)
+df_output <- df_output %>% arrange(desc(frag_length))
+
+# label the data for later as REAL SAMPLE data, for visualization against theoretical 6-base cutter digestion
+df_output <- df_output %>% mutate(data_type = "real_data")
+
+```
+
+```{r filtering then final analysis}
+# we will apply a dynamic filtering, based on the output size ranges to remove the 
+# upper and lower X percent of fragments, assuming these are rare events and do not 
+# contribute to the the overall distribution -- effectively outliers due to sequence
+# mistakes (missing RE sites) or highly repetitive (and do not have a site) regions
+# or incomplete data (like a very long region of NNNNNNNN)
+
+# cut smallest X% and largest Y% of all fragments generated. These thresholds can be
+# different, to account for non-uniform dist of small vs large fragments. You want to
+# cut outliers as much as possible without removing good data -- depends on the data
+remove_fraction_large <- 0.001
+remove_fraction_small <- 0.05
+
+limit_row_upper <- round(remove_fraction_large*nrow(df_output),0)
+limit_row_upper <- ifelse(limit_row_upper > 1, limit_row_upper, 1)
+
+limit_row_lower <- round(remove_fraction_small*nrow(df_output),0)
+limit_row_lower <- ifelse(limit_row_lower > 1, limit_row_lower, 1)
+
+# copy the frag list into a new df for trimming, keep the raw for boxplots
+df_filtered <- head(df_output, -limit_row_lower)
+df_filtered <- tail(df_filtered, -limit_row_upper)
+
+# after filtering the "fragment outliers", take some stats on the data
+total_frags <- as.integer(nrow(df_filtered))
+total_bases <- sum(df_filtered$frag_length)
+min_length <- min(df_filtered$frag_length)
+max_length <- max(df_filtered$frag_length)
+avg_length <- mean(df_filtered$frag_length)
+sd_length <- sd(df_filtered$frag_length)
+
+```
+
+```{r boxplot analysis of raw output}
+# check on the fragment distribution for all discovered cuts, before filtering outliers, so we can see how tight the raw output is
+# and decide if filtering is correct, and if 1% is enough, or if we need to apply a more stringent cut off for outliers.
+
+frag_boxplot <- ggplot(df_output, aes(x = data_type, y = frag_length)) + 
+  geom_boxplot(width=0.3) +
+  scale_y_continuous(transform = "log10") +
+  labs(x = "Sample digested", y = "Fragment length (bp)") +
+  ggtitle("Unfiltered digestion") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_blank()) +
+  
+  geom_hline(yintercept = max_length, linewidth = 2, color = "red") +
+  annotate("text", x = 1.4, y = max_length, label = "Upper", vjust = 3.3, size = 4) +
+  annotate("text", x = 1.4, y = max_length, label = max_length, vjust = 1.9, color = "blue") +
+  
+  geom_hline(yintercept = min_length, linewidth = 2, color = "red") + 
+  annotate("text", x = 1.4, y = min_length, label = "Lower", vjust = -2.3, size = 4) +
+  annotate("text", x = 1.4, y = min_length, label = min_length, vjust = -0.8, color = "blue")
+
+frag_boxplot
+
+```
+
+```{r plotting density plot, echo=FALSE}
+# make theoretical distributions for 6-base cutters - assumes uniform distribution of RE sites in a genome (the naive assumption).
+# How often will a RE cut DNA? For 6-base cutter, take each DNA base (ATCG) = pick 6 at random = 4^6 combinations that are unique.
+# This means every 4096 bp expected between a repeated cut site for a generic 6-base cutter -- assumes random distribution of DNA.
+
+# use a sd = 4096 bp (assumes one skipped or extra digest site = 1 sd), for the theoretical distribution of an ideal 6-base cutter
+
+# n = number from the real data, so the model will be directly comparable in terms of the density plot; same # of observations
+# the mean = average, sd = standard deviation based on theoretical 6-base cutting (as described above)
+# use absolute value so the lengths cannot be negative
+df_6normal <- data.frame(frag_length = abs(round(rnorm(n = total_frags, mean = 4096, sd = 4096))))
+df_6normal <- df_6normal %>% mutate(data_type = "base6_data")
+
+# concat all fragment dist. to overlap on histogram
+df_digested <- rbind(df_filtered, df_6normal)
+
+# hardcode the bin number = it looks nicer. You can change this if you want to.
+bin_number <- 128
+
+# use a density plot, so it will look nice for lots of fragments or just a few -- agnostic to genome size
+frag_density <- ggplot(df_digested, aes(x = frag_length, fill = data_type)) + 
+  geom_density(alpha = 0.6, bw = 2.2) +
+  theme_classic() +
+  scale_x_sqrt() +
+  scale_y_sqrt() +
+  scale_fill_discrete(name = "Digestion with:", labels = c("Hypothetical 6-base", "Actual RE distribution")) +
+  labs(x = "Fragment length (bp)", y = "Fraction of total fragments") +
+  ggtitle(title_for_plot) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "bottom")
+
+#frag_density
+
+```
+
+```{r show and save output}
+if (!require("gridExtra", quietly = TRUE)){install.packages("gridExtra")}
+library(gridExtra)
+
+if (!require("stringr", quietly = TRUE)){install.packages("stringr")}
+library(stringr)
+
+both_plots <- grid.arrange(frag_boxplot, frag_density, ncol = 2, widths = c(1, 2))
+
+# save output files -- name based on date and dynamic version number.
+today <- format(Sys.Date(), "%y%m%d")
+
+#frag_boxplot
+existing_files <- list.files(path = "./", pattern = "*_frag_boxplot_*", full.names = FALSE)
+indexer <- 1
+if(length(existing_files) > 0){
+  indexer <- str_extract(existing_files[length(existing_files)], "(?<=_frag_boxplot_).") 
+  indexer <- as.integer(indexer) + 1
+}
+file_name <- paste0(today,"_frag_boxplot_",indexer,".png")
+ggsave(file=file_name, plot=frag_boxplot, width=7, height=5)
+
+#frag_density
+existing_files <- list.files(path = "./", pattern = "*_frag_density_*", full.names = FALSE)
+indexer <- 1
+if(length(existing_files) > 0){
+  indexer <- str_extract(existing_files[length(existing_files)], "(?<=_frag_density_).") 
+  indexer <- as.integer(indexer) + 1
+}
+file_name <- paste0(today,"_frag_density_",indexer,".png")
+ggsave(file=file_name, plot=frag_density, width=7, height=5)
+
+#both_plots
+existing_files <- list.files(path = "./", pattern = "*_both_plots_*", full.names = FALSE)
+indexer <- 1
+if(length(existing_files) > 0){
+  indexer <- str_extract(existing_files[length(existing_files)], "(?<=_both_plots_).") 
+  indexer <- as.integer(indexer) + 1
+}
+file_name <- paste0(today,"_both_plots_",indexer,".png")
+ggsave(file=file_name, plot=both_plots, width=7, height=5)
+
+# print out the post-filter metrics
+print(paste0("total_frags = ", total_frags)) 
+print(paste0("total_bases = ", total_bases)) 
+print(paste0("min_length = ", min_length)) 
+print(paste0("max_length = ", max_length)) 
+print(paste0("avg_length = ", round(avg_length,0))) 
+print(paste0("sd_length = ", round(sd_length,0))) 
+
+```
